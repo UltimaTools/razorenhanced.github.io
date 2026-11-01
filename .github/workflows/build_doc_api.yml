@@ -6,19 +6,21 @@ name: AutoDoc API
 on:
   workflow_dispatch:
   push:
+    paths:
+      - latest.json
+      - doc/autodoc.py
 
 jobs:
   rebuild_docs:
     runs-on: windows-latest
-    
+
     steps:
     # Checkout the repository (without LFS)
     - name: Checkout website repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
       with:
-        repository: RazorEnhanced/razorenhanced.github.io
         path: website_repo
-    
+
     # Get latest version information from local latest.json
     - name: Get latest version information
       id: get_version
@@ -27,12 +29,16 @@ jobs:
         $latestJson = Get-Content -Path $latestJsonPath | ConvertFrom-Json
         $version = $latestJson.version
         $zipUrl = $latestJson.zipUrl
+        if (-not $version) { throw "latest.json missing version" }
+        if (-not $zipUrl) { throw "latest.json missing zipUrl" }
+        if (-not $latestJson.sha256) { throw "latest.json missing sha256" }
         Write-Host "Latest version: $version"
         Write-Host "ZIP URL: $zipUrl"
         echo "version=$version" >> $env:GITHUB_OUTPUT
         echo "zip_url=$zipUrl" >> $env:GITHUB_OUTPUT
+        echo "sha256=$($latestJson.sha256)" >> $env:GITHUB_OUTPUT
       shell: pwsh
-    
+
     # Download the zip file using the URL from latest.json
     - name: Download release ZIP
       run: |
@@ -41,33 +47,44 @@ jobs:
         Write-Host "Downloading $zipUrl to $outputFile"
         Invoke-WebRequest -Uri $zipUrl -OutFile $outputFile
       shell: pwsh
-    
+
+    # Verify the downloaded ZIP against the checksum in latest.json
+    - name: Verify release ZIP
+      run: |
+        $expected = "${{ steps.get_version.outputs.sha256 }}"
+        $outputFile = "RazorEnhanced-${{ steps.get_version.outputs.version }}.zip"
+        $actual = (Get-FileHash -Algorithm SHA256 $outputFile).Hash.ToLower()
+        Write-Host "Expected SHA-256: $expected"
+        Write-Host "Actual SHA-256:   $actual"
+        if ($actual -ne $expected.ToLower()) { throw "SHA-256 mismatch" }
+      shell: pwsh
+
     # Extract the ZIP file
     - name: Extract ZIP file
       run: |
         # Create extraction directory
         New-Item -ItemType Directory -Path "extracted" -Force
-        
+
         # Use the downloaded file
         $outputFile = "RazorEnhanced-${{ steps.get_version.outputs.version }}.zip"
         Write-Host "Extracting ZIP: $outputFile"
         7z x $outputFile -o"./extracted"
       shell: pwsh
-      
+
     - name: Display extracted files
       run: dir extracted
-  
-    # Try to run directly   
+
+    # Try to run directly
     - name: Run RE to trigger the creation of AutoComplete.json
       run: |
         cd extracted
         RazorEnhanced.exe --autoDocsOnly
         dir Config
       shell: cmd
-    
+
     - name: Display directories
       run: dir extracted/Config/
-      
+
     # Build Docs (use the AutoDoc.py file from the repository)
     - name: Run autodoc.py
       run: |
@@ -77,7 +94,7 @@ jobs:
         # Run AutoDoc
         python autodoc.py
       shell: pwsh
-    
+
     # Copy generated docs to the repository
     - name: Update repo documentation
       run: |
@@ -94,11 +111,13 @@ jobs:
         git commit -m "GitHub Actions build_docs" || echo "No changes to commit"
       shell: pwsh
 
-    # Push changes using dedicated action
+    # Push changes with the fine-grained PAT (required for Pages to rebuild)
     - name: Push changes
-      uses: ad-m/github-push-action@master
-      with:
-        directory: website_repo
-        github_token: ${{ secrets.DEPLOYMENT_TOKEN }}
-        repository: RazorEnhanced/razorenhanced.github.io
-        branch: main
+      env:
+        DEPLOYMENT_TOKEN: ${{ secrets.DEPLOYMENT_TOKEN }}
+      run: |
+        if (-not $env:DEPLOYMENT_TOKEN) { throw "DEPLOYMENT_TOKEN secret is not set" }
+        cd website_repo
+        git remote set-url origin "https://x-access-token:$env:DEPLOYMENT_TOKEN@github.com/UltimaTools/razorenhanced.github.io.git"
+        git push origin HEAD:main
+      shell: pwsh
