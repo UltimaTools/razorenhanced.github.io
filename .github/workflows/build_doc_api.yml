@@ -1,0 +1,104 @@
+# This is a basic workflow that is manually triggered
+
+name: AutoDoc API
+
+# Controls when the action will run.
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  rebuild_docs:
+    runs-on: windows-latest
+    
+    steps:
+    # Checkout the repository (without LFS)
+    - name: Checkout website repo
+      uses: actions/checkout@v3
+      with:
+        repository: RazorEnhanced/razorenhanced.github.io
+        path: website_repo
+    
+    # Get latest version information from local latest.json
+    - name: Get latest version information
+      id: get_version
+      run: |
+        $latestJsonPath = "website_repo/latest.json"
+        $latestJson = Get-Content -Path $latestJsonPath | ConvertFrom-Json
+        $version = $latestJson.version
+        $zipUrl = $latestJson.zipUrl
+        Write-Host "Latest version: $version"
+        Write-Host "ZIP URL: $zipUrl"
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        echo "zip_url=$zipUrl" >> $env:GITHUB_OUTPUT
+      shell: pwsh
+    
+    # Download the zip file using the URL from latest.json
+    - name: Download release ZIP
+      run: |
+        $zipUrl = "${{ steps.get_version.outputs.zip_url }}"
+        $outputFile = "RazorEnhanced-${{ steps.get_version.outputs.version }}.zip"
+        Write-Host "Downloading $zipUrl to $outputFile"
+        Invoke-WebRequest -Uri $zipUrl -OutFile $outputFile
+      shell: pwsh
+    
+    # Extract the ZIP file
+    - name: Extract ZIP file
+      run: |
+        # Create extraction directory
+        New-Item -ItemType Directory -Path "extracted" -Force
+        
+        # Use the downloaded file
+        $outputFile = "RazorEnhanced-${{ steps.get_version.outputs.version }}.zip"
+        Write-Host "Extracting ZIP: $outputFile"
+        7z x $outputFile -o"./extracted"
+      shell: pwsh
+      
+    - name: Display extracted files
+      run: dir extracted
+  
+    # Try to run directly   
+    - name: Run RE to trigger the creation of AutoComplete.json
+      run: |
+        cd extracted
+        RazorEnhanced.exe --autoDocsOnly
+        dir Config
+      shell: cmd
+    
+    - name: Display directories
+      run: dir extracted/Config/
+      
+    # Build Docs (use the AutoDoc.py file from the repository)
+    - name: Run autodoc.py
+      run: |
+        cd extracted
+        # Copy AutoDoc.py from the repository
+        Copy-Item "../website_repo/doc/autodoc.py" -Destination "."
+        # Run AutoDoc
+        python autodoc.py
+      shell: pwsh
+    
+    # Copy generated docs to the repository
+    - name: Update repo documentation
+      run: |
+        Copy-Item -Path "extracted/doc/*" -Destination "website_repo/doc/" -Recurse -Force -Verbose
+      shell: pwsh
+
+    # Commit changes
+    - name: Commit
+      run: |
+        cd website_repo
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+        git add doc/
+        git commit -m "GitHub Actions build_docs" || echo "No changes to commit"
+      shell: pwsh
+
+    # Push changes using dedicated action
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        directory: website_repo
+        github_token: ${{ secrets.DEPLOYMENT_TOKEN }}
+        repository: RazorEnhanced/razorenhanced.github.io
+        branch: main
