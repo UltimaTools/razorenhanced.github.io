@@ -20,6 +20,7 @@ jobs:
       uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
       with:
         path: website_repo
+        token: ${{ secrets.DEPLOYMENT_TOKEN }}
 
     # Get latest version information from local latest.json
     - name: Get latest version information
@@ -118,6 +119,5 @@ jobs:
       run: |
         if (-not $env:DEPLOYMENT_TOKEN) { throw "DEPLOYMENT_TOKEN secret is not set" }
         cd website_repo
-        git remote set-url origin "https://x-access-token:$env:DEPLOYMENT_TOKEN@github.com/UltimaTools/razorenhanced.github.io.git"
         git push origin HEAD:main
       shell: pwsh
